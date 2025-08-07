@@ -1,6 +1,8 @@
 # 🧠 Plagiarism Detection Pipeline
 
-This repository contains a complete pipeline for detecting potential plagiarism in LaTeX academic papers using Siamese BERT (trained on Pan-Plagiarism Dataset).
+⚠️ **BETA VERSION - UNDER ACTIVE DEVELOPMENT**  
+
+This pipeline implements a multi-stage approach to detect plagiarism in academic papers from a large corpus of arXiv documents. The system begins by training a Siamese BERT model on the PAN Plagiarism Dataset, which learns to identify semantic similarities between text pairs that indicate potential plagiarism (for more info on PAN plagiarism dataset see appendix). Once trained, the pipeline processes approximately 1 million LaTeX papers from arXiv; First, HDBSCAN clustering groups similar papers together, based on abstract, to reduce computational overhead and focus analysis on potentially related documents within each cluster. Next, Bloom filters perform efficient n-gram analysis to identify papers with significant textual overlap within each cluster, generating a set of candidate paper pairs with shared phrases and potentially suspicious similarities. These Bloom filter candidates are then passed through the trained Siamese BERT model for semantic similarity analysis, which can detect more nuanced forms of plagiarism including paraphrasing and conceptual duplication that simple text matching might miss. The entire pipeline is designed to scale efficiently using HUJI cluster, ultimately producing a ranked list of paper pairs with high plagiarism likelihood scores for further human review.
 
 ## 🚀 Training
 
