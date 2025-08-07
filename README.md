@@ -1,15 +1,10 @@
 # 🧠 Plagiarism Detection Pipeline
 
-This repository contains a complete pipeline for detecting potential plagiarism in LaTeX academic papers using Bloom Filters, Siamese BERT, and clustering techniques.
+This repository contains a complete pipeline for detecting potential plagiarism in LaTeX academic papers using Siamese BERT (trained on Pan-Plagiarism Dataset).
 
 ## 🚀 Training
 
-We moved the training phase to a compute cluster by:
-- Predefining a corpus dataset on a local machine
-- Uploading it to the cluster
-- Creating a dedicated GPU-enabled training environment
-
-## 📁 Files Required in Your Home Folder on the Cluster
+## 📁 Files Required in Your Home Folder on the HUJI Cluster
 
 Ensure the following files exist in your **home folder** (`~/`) on the cluster:
 
@@ -19,8 +14,6 @@ Ensure the following files exist in your **home folder** (`~/`) on the cluster:
 4. `run_plagiarism_detection.sh`
 5. `train_pairs.json` — generated locally by running `run_plagiarism_detection.sh` (only the corpus creation stage)
 6. `val_pairs.json` — same as above
-
-💡 **Note:** You don't need to train locally — stop the script once the corpus is created.
 
 ## 🏋️ Start Training
 
