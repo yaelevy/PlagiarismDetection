@@ -125,7 +125,7 @@ This uses `inference_pipeline.py` and the model checkpoint to detect semantic ov
 
 ### Building Ground Truth Dataset for Plagiarism Instances
 
-The training data for this pipeline comes from the PAN Plagiarism Dataset, which provides manually annotated plagiarism instances for supervised learning.
+The training data for this pipeline comes from the PAN Plagiarism Dataset, which provides manually annotated plagiarism instances for supervised learning. This part was done localy (not on the cluster).
 
 #### Dataset Setup
 
