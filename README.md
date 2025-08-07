@@ -138,47 +138,7 @@ The training data for this pipeline comes from the PAN Plagiarism Dataset, which
 
 #### Extracting Plagiarism Mappings
 
-To build the ground truth dataset, we created a Unix script that processes XML annotation files and extracts exact plagiarism passages with their corresponding offsets and metadata:
-
-```bash
-cat > extract_all_parts.sh << 'EOF'
-#!/bin/bash
-# Add CSV header
-echo "source_id,suspicious_id,type,obfuscation,source_offset,source_length,suspicious_offset,suspicious_length"
-
-# Process all parts
-for part_dir in part*; do
-    if [ -d "$part_dir" ]; then
-        echo "Processing $part_dir..." >&2
-        cd "$part_dir"
-        
-        # Process all XML files that contain source_reference
-        for file in $(grep -l "source_reference" *.xml 2>/dev/null); do
-            suspicious_id=$(basename "$file" .xml)
-            
-            # Extract plagiarism features
-            grep 'feature name="plagiarism"' "$file" | while read line; do
-                type=$(echo "$line" | sed -n 's/.*type="\([^"]*\)".*/\1/p')
-                obfuscation=$(echo "$line" | sed -n 's/.*obfuscation="\([^"]*\)".*/\1/p')
-                this_offset=$(echo "$line" | sed -n 's/.*this_offset="\([^"]*\)".*/\1/p')
-                this_length=$(echo "$line" | sed -n 's/.*this_length="\([^"]*\)".*/\1/p')
-                source_ref=$(echo "$line" | sed -n 's/.*source_reference="\([^"]*\)".*/\1/p')
-                source_offset=$(echo "$line" | sed -n 's/.*source_offset="\([^"]*\)".*/\1/p')
-                source_length=$(echo "$line" | sed -n 's/.*source_length="\([^"]*\)".*/\1/p')
-                
-                if [ ! -z "$source_ref" ]; then
-                    echo "$source_ref,$suspicious_id,$type,$obfuscation,$source_offset,$source_length,$this_offset,$this_length"
-                fi
-            done
-        done
-        cd ..
-    fi
-done
-echo "Extraction completed!" >&2
-EOF
-
-chmod +x extract_all_parts.sh
-```
+To build the ground truth dataset, we created a Unix script that processes XML annotation files and extracts exact plagiarism passages with their corresponding offsets and metadata.
 
 Run the extraction script:
 
