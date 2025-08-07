@@ -121,19 +121,27 @@ Apply the trained model to Bloom candidates:
 This uses `inference_pipeline.py` and the model checkpoint to detect semantic overlap.
 
 
-Appendix: PAN Plagiarism Dataset
-Building Ground Truth Dataset for Plagiarism Instances
+## Appendix: PAN Plagiarism Dataset
+
+### Building Ground Truth Dataset for Plagiarism Instances
+
 The training data for this pipeline comes from the PAN Plagiarism Dataset, which provides manually annotated plagiarism instances for supervised learning.
-Dataset Setup
 
-Download PAN-Plagiarism files from the official repository:
-https://zenodo.org/records/3250095
+#### Dataset Setup
 
-Merge external tasks from both downloaded files into a single directory structure, consolidating all source and suspicious document instances in the external folder.
+1. **Download PAN-Plagiarism files** from the official repository:
+   ```
+   https://zenodo.org/records/3250095
+   ```
 
-Extracting Plagiarism Mappings
+2. **Merge external tasks** from both downloaded files into a single directory structure, consolidating all source and suspicious document instances in the external folder.
+
+#### Extracting Plagiarism Mappings
+
 To build the ground truth dataset, we created a Unix script that processes XML annotation files and extracts exact plagiarism passages with their corresponding offsets and metadata:
-bashcat > extract_all_parts.sh << 'EOF'
+
+```bash
+cat > extract_all_parts.sh << 'EOF'
 #!/bin/bash
 # Add CSV header
 echo "source_id,suspicious_id,type,obfuscation,source_offset,source_length,suspicious_offset,suspicious_length"
@@ -170,21 +178,34 @@ echo "Extraction completed!" >&2
 EOF
 
 chmod +x extract_all_parts.sh
+```
+
 Run the extraction script:
-bash./extract_all_parts.sh > all_plagiarism_mappings.csv
-Viewing Specific Plagiarism Instances
+
+```bash
+./extract_all_parts.sh > all_plagiarism_mappings.csv
+```
+
+#### Viewing Specific Plagiarism Instances
+
 To examine actual plagiarized text passages, place the following helper scripts in the suspicious directory and make them executable:
 
-process_csv_final.sh
-extract_passages_final.sh
-find_document_by_number.sh
+- `process_csv_final.sh`
+- `extract_passages_final.sh` 
+- `find_document_by_number.sh`
 
-bashchmod +x find_document_by_number.sh extract_passages_final.sh process_csv_final.sh
+```bash
+chmod +x find_document_by_number.sh extract_passages_final.sh process_csv_final.sh
 source process_csv_final.sh
-Example Usage:
-bashcorpus_path="/path/to/pan-plagiarism-corpus-2011-1/external-detection-corpus"
+```
+
+**Example Usage:**
+```bash
+corpus_path="/path/to/pan-plagiarism-corpus-2011-1/external-detection-corpus"
 csv_file="all_plagiarism_mappings.csv"
 
 # Extract a specific plagiarism instance (e.g., row 1)
 extract_row 1 "$csv_file" "$corpus_path"
+```
+
 This process creates a comprehensive dataset of plagiarism instances with precise text offsets, enabling the Siamese BERT model to learn from real-world plagiarism patterns including various obfuscation techniques like paraphrasing, translation, and structural modifications.
