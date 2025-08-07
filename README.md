@@ -92,11 +92,6 @@ python bloom_pipeline.py preprocess
 
 To test specific paper pairs:
 
-```bash
-python bloom_pipeline.py test --paper_a PAPER1_ID --paper_b PAPER2_ID
-```
-
-Example:
 
 ```bash
 python bloom_pipeline.py test --paper_a 1602.05576v1.tex --paper_b 1611.05859v1.tex
