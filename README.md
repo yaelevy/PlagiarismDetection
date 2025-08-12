@@ -90,6 +90,8 @@ Run the Bloom filter n-gram analysis:
 python bloom_pipeline.py preprocess
 ```
 
+**Output:** `bloom_candidates.json`
+
 To test specific paper pairs:
 
 
@@ -102,8 +104,6 @@ We can also generate a JSON with all of the overlapping instances from candidate
 ```bash
 python process_bloom_candidates.py
 ```
-
-**Output:** `bloom_candidates.json`
 
 ### Step 4: Siamese BERT Inference
 
