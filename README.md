@@ -97,13 +97,13 @@ To test specific paper pairs:
 python bloom_pipeline.py test --paper_a 1602.05576v1.tex --paper_b 1611.05859v1.tex
 ```
 
-**Output:** `bloom_candidates.json`, showing overlapping phrases such as:
+We can also generate a JSON with all of the overlapping instances from candidate pairs using which will output bloom_overlap_results.json
 
+```bash
+python process_bloom_candidates.py
 ```
-1. a function of density temperature and electron fraction
-2. is a function of density temperature and electron
-3. to the viability of the neutrino driven mechanism
-```
+
+**Output:** `bloom_candidates.json`
 
 ### Step 4: Siamese BERT Inference
 
