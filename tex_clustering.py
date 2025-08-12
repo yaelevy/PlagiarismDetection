@@ -19,6 +19,9 @@ from umap import UMAP
 from hdbscan import HDBSCAN
 import nltk
 from nltk.corpus import stopwords
+import matplotlib
+matplotlib.use('Agg')
+
 
 def extract_abstract_from_tex(tex_content):
     """Extract abstract from LaTeX content - handles many variations"""
@@ -367,7 +370,7 @@ def semantic_prefilter(df):
 
 
 # Visualization functions (same as your reference)
-def visualize_clusters(embeddings, clusters):
+def visualize_clusters(embeddings, clusters, save_path="cluster_visualization.png"):
     # First reduce to 2D for visualization regardless of previous reduction
     umap_2d = UMAP(n_components=2, n_neighbors=15, min_dist=0.1, random_state=42)
     vis_embeddings = umap_2d.fit_transform(embeddings)
@@ -414,12 +417,17 @@ def visualize_clusters(embeddings, clusters):
     # Adjust layout to make room for the legend at the bottom
     plt.tight_layout(rect=[0, 0.1, 1, 0.95])
 
-    return plt
+    # Save the plot instead of showing it
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.close()  # Close the figure to free memory
+    print(f"Cluster visualization saved to: {save_path}")
+
+    return save_path
 
 
-def visualize_cluster_sample(df, embeddings, clusters, n_samples=3):
+def visualize_cluster_sample(df, embeddings, clusters, n_samples=3, save_path="cluster_visualization.png"):
     """Visualize clusters and display sample titles from each cluster"""
-    plot = visualize_clusters(embeddings, clusters)
+    plot_path = visualize_clusters(embeddings, clusters, save_path)
 
     # Display sample documents from each cluster
     print("Sample documents from each cluster:")
@@ -435,7 +443,7 @@ def visualize_cluster_sample(df, embeddings, clusters, n_samples=3):
         for idx, row in sample_docs.iterrows():
             print(f"  - {row['title']}")
 
-    plot.show()
+    return plot_path
 
 
 # Download necessary NLTK data
@@ -537,6 +545,8 @@ def main():
     # Step 6: Visualize (optional)
     try:
         visualize_cluster_sample(df, embeddings, clusters)
+        print("Cluster visualization saved 'cluster_visualization.png'")
+
     except Exception as e:
         print(f"Visualization failed: {e}")
     
