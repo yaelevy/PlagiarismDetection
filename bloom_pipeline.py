@@ -682,7 +682,7 @@ def test_bloom_accuracy(file_a, file_b):
         print("  • Send this pair to your ML model for detailed analysis")
         print("  • Check for common authors first")
 
-    return actual_overlaps, bloom_overlap_count
+    return actual_overlaps, bloom_overlap_count, overlapping_ngrams
 
 
 def preprocess_clusters():
@@ -949,7 +949,7 @@ def main():
             return
 
         # Run accuracy test
-        test_bloom_accuracy(file_a, file_b)
+        actual_overlaps, bloom_overlap_count, overlapping_ngrams = test_bloom_accuracy(file_a, file_b)
 
 
 if __name__ == "__main__":
