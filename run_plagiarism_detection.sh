@@ -7,7 +7,7 @@
 CORPUS_PATH="/Users/yaronot/Desktop/Data Courses/Plagiarism Detection/pan-plagiarism-corpus-2011-1/external-detection-corpus"
 CSV_FILE="all_plagiarism_mappings.csv"
 OUTPUT_DIR="./plagiarism_output"
-SAMPLE_SIZE=1000
+SAMPLE_SIZE=20000
 EPOCHS=3
 BATCH_SIZE=8
 LEARNING_RATE=2e-5

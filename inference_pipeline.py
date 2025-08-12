@@ -81,6 +81,7 @@ def extract_content_for_inference(tex_file_path: str) -> str:
         tex_content = re.sub(r'~', ' ', tex_content)
         tex_content = re.sub(r'\s+', ' ', tex_content)
 
+
         return tex_content.strip()
 
     except Exception as e:
@@ -134,7 +135,9 @@ def chunk_text_for_bert(text: str, tokenizer, max_length: int = 512) -> List[str
     # Add final chunk
     if current_chunk:
         chunks.append(current_chunk)
-    
+
+
+
     return chunks if chunks else [text[:1000]]  # Fallback
 
 
@@ -169,6 +172,7 @@ def compare_papers_with_chunking(model: SiameseBERT, tokenizer, file_a: str, fil
     
     for chunk_a in chunks_a:
         for chunk_b in chunks_b:
+            print("chunk_a:", chunk_a, "chunk_b:", chunk_b)
             result = predict_similarity(model, tokenizer, chunk_a, chunk_b, 
                                       threshold=None, device=device)
             score = result['similarity_score']

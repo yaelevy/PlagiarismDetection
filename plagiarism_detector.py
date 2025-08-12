@@ -142,7 +142,7 @@ class SiameseBERT(nn.Module):
         
         # Predict similarity
         similarity = self.classifier(combined)
-        print(f"Similarity score: {similarity}")
+        #print(f"Similarity score: {similarity}")
         return similarity.squeeze()
 
 class PlagiarismDataLoader:
@@ -189,12 +189,12 @@ class PlagiarismDataLoader:
 
         # Filter to only include only 'low' obfuscation types
         print(f"Original dataset size: {len(df)}")
-        df = df[df['obfuscation'] == 'low']
-        print(f"Filtered dataset size (low only): {len(df)}")
+        df = df[(df['obfuscation'] == 'low') | (df['obfuscation'] == 'high')]
+        print(f"Filtered dataset size (low and high): {len(df)}")
         print(f"Obfuscation distribution: {df['obfuscation'].value_counts().to_dict()}")
 
         print(f"Unique obfuscation types after filtering: {df['obfuscation'].unique()}")
-        print(f"Should only show ['low']: {list(df['obfuscation'].unique())}")
+        print(f"Should only show ['low','high]: {list(df['obfuscation'].unique())}")
 
         if sample_size and len(df) > sample_size:
             df = df.sample(n=sample_size, random_state=42)
@@ -242,27 +242,86 @@ class PlagiarismDataLoader:
         print(f"Filtered out {filtered_out_count} pairs due to token length > {max_tokens}")
         print(f"Retention rate: {len(positive_pairs) / (len(positive_pairs) + filtered_out_count) * 100:.1f}%")
         return positive_pairs
-    
-    def create_negative_pairs(self, positive_pairs: List[Dict], ratio: float = 1.0) -> List[Dict]:
-        """Create negative pairs by randomly pairing unrelated passages"""
+
+    def create_negative_pairs(self, positive_pairs: List[Dict], ratio: float = 1.0, max_tokens: int = 512) -> List[
+        Dict]:
+        """Create negative pairs by randomly pairing unrelated passages with length distribution matching positive pairs"""
+        from transformers import AutoTokenizer
+        import numpy as np
+
+        tokenizer = AutoTokenizer.from_pretrained('bert-base-uncased')
         negative_pairs = []
         n_negatives = int(len(positive_pairs) * ratio)
-        
-        # Get all unique passages
+
+        # Get all unique passages with their token lengths
         all_passages = []
         for pair in positive_pairs:
             all_passages.extend([pair['text1'], pair['text2']])
-        
-        print(f"Creating {n_negatives} negative pairs...")
-        for _ in tqdm(range(n_negatives)):
-            text1, text2 = random.sample(all_passages, 2)
-            negative_pairs.append({
-                'text1': text1,
-                'text2': text2,
-                'label': 0,
-                'obfuscation': 'none'
-            })
-        
+        all_passages = list(set(all_passages))  # Remove duplicates
+
+        # Pre-compute token lengths for all passages
+        passage_token_lengths = {}
+        for passage in all_passages:
+            tokens = tokenizer(passage, add_special_tokens=True)['input_ids']
+            if len(tokens) <= max_tokens:  # Only keep passages within token limit
+                passage_token_lengths[passage] = len(tokens)
+
+        valid_passages = list(passage_token_lengths.keys())
+        print(f"Valid passages for negative sampling: {len(valid_passages)}")
+
+        # Calculate length differences from positive pairs
+        positive_length_diffs = []
+        for pair in positive_pairs:
+            text1_len = len(tokenizer(pair['text1'], add_special_tokens=True)['input_ids'])
+            text2_len = len(tokenizer(pair['text2'], add_special_tokens=True)['input_ids'])
+            positive_length_diffs.append(abs(text1_len - text2_len))
+
+        print(f"Creating {n_negatives} negative pairs with length distribution matching positive pairs...")
+        print(
+            f"Positive pairs length diff - avg: {np.mean(positive_length_diffs):.2f}, std: {np.std(positive_length_diffs):.2f}")
+
+        attempts = 0
+        max_attempts = n_negatives * 50  # Increased attempts for more selective sampling
+
+        while len(negative_pairs) < n_negatives and attempts < max_attempts:
+            # Sample a target length difference from positive pairs
+            target_length_diff = random.choice(positive_length_diffs)
+
+            # Randomly select first passage
+            text1 = random.choice(valid_passages)
+            text1_len = passage_token_lengths[text1]
+
+            # Find passages with similar length difference
+            tolerance = max(5, int(target_length_diff * 0.2))  # 20% tolerance, min 5 tokens
+            target_text2_len_min = max(1, text1_len - target_length_diff - tolerance)
+            target_text2_len_max = text1_len - target_length_diff + tolerance
+
+            # Also consider the reverse (text2 longer than text1)
+            target_text2_len_min_rev = text1_len + target_length_diff - tolerance
+            target_text2_len_max_rev = text1_len + target_length_diff + tolerance
+
+            # Find candidate passages
+            candidates = [
+                passage for passage in valid_passages
+                if passage != text1 and (
+                        (target_text2_len_min <= passage_token_lengths[passage] <= target_text2_len_max) or
+                        (target_text2_len_min_rev <= passage_token_lengths[passage] <= target_text2_len_max_rev)
+                )
+            ]
+
+            if candidates:
+                text2 = random.choice(candidates)
+                actual_diff = abs(passage_token_lengths[text1] - passage_token_lengths[text2])
+
+                negative_pairs.append({
+                    'text1': text1,
+                    'text2': text2,
+                    'label': 0,
+                    'obfuscation': 'none'
+                })
+
+            attempts += 1
+
         return negative_pairs
 
 class PlagiarismTrainer:
@@ -295,7 +354,7 @@ class PlagiarismTrainer:
             
             # Forward pass
             outputs = self.model(input_ids_1, attention_mask_1, input_ids_2, attention_mask_2)
-            print(f"labels: {labels}")
+            #print(f"labels: {labels}")
             loss = F.binary_cross_entropy(outputs, labels)
             
             # Backward pass
@@ -465,7 +524,7 @@ def main():
     parser.add_argument('--batch_size', type=int, default=8, help='Batch size')
     parser.add_argument('--epochs', type=int, default=3, help='Number of epochs')
     parser.add_argument('--learning_rate', type=float, default=2e-5, help='Learning rate')
-    parser.add_argument('--sample_size', type=int, default=1000, help='Sample size for training')
+    parser.add_argument('--sample_size', type=int, default=20000, help='Sample size for training')
     parser.add_argument('--output_dir', default='.', help='Output directory for models and plots')
     parser.add_argument('--test_text1', help='First text for similarity test')
     parser.add_argument('--test_text2', help='Second text for similarity test')
@@ -481,13 +540,26 @@ def main():
     
     # Initialize tokenizer
     tokenizer = AutoTokenizer.from_pretrained(args.model_name)
-    
+
     # If inference only
     if args.load_model and args.test_text1 and args.test_text2:
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        print(f"Using device: {device}")
+
         model = SiameseBERT(args.model_name)
-        model.load_state_dict(torch.load(args.load_model))
-        similarity = predict_similarity(model, tokenizer, args.test_text1, args.test_text2, threshold=args.threshold if hasattr(args, 'threshold') else None)
-        print(f"Similarity score: {similarity:.4f}")
+        model.load_state_dict(torch.load(args.load_model, map_location=device))
+        model = model.to(device)
+
+        similarity = predict_similarity(model, tokenizer, args.test_text1, args.test_text2,
+                                        threshold=args.threshold if hasattr(args, 'threshold') else None,
+                                        device=device)
+
+        if isinstance(similarity, dict):
+            print(f"Similarity score: {similarity['similarity_score']:.4f}")
+            if 'is_plagiarized' in similarity:
+                print(f"Is plagiarized (threshold {similarity['threshold_used']}): {similarity['is_plagiarized']}")
+        else:
+            print(f"Similarity score: {similarity:.4f}")
         sys.exit(0)
     
     print(f"Device: {'cuda' if torch.cuda.is_available() else 'cpu'}")
