@@ -64,6 +64,10 @@ This copies necessary scripts and models into `/tmp` for fast access.
 - `inference_pipeline.py` — runs inference with Siamese BERT
 - `run_plagiarism_weights.sh` — script to apply the trained weights
 - `best_siamese_bert.pth` — trained model weights
+- `process_bloom_candidates.py`
+- `plagiarism_detector.py`
+
+
 
 ##  Analysis Steps
 
@@ -99,21 +103,26 @@ To test specific paper pairs:
 python bloom_pipeline.py test --paper_a 1602.05576v1.tex --paper_b 1611.05859v1.tex
 ```
 
-We can also generate a JSON with all of the overlapping instances from candidate pairs using which will output bloom_overlap_results.json
+Then we can also generate a JSON with all of the overlapping instances from candidate pairs using 
 
 ```bash
 python process_bloom_candidates.py
 ```
 
+**Output:** `bloom_overlap_results.json.json`
+
+
 ### Step 4: Siamese BERT Inference
 
-Apply the trained model to Bloom candidates:
+Apply the trained model to Bloom candidates from the bloom_overlap_results.json:
 
 ```bash
 ./run_plagiarism_weights.sh
 ```
 
-This uses `inference_pipeline.py` and the model checkpoint to detect semantic overlap.
+This uses `inference_pipeline.py` and the model trained weights to detect semantic overlap between paragraphs.
+
+**Output:** `inference_results_{int(time.time())}.json`
 
 
 ## Appendix: PAN Plagiarism Dataset
