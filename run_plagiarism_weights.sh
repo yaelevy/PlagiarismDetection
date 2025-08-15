@@ -5,7 +5,7 @@
 
 # Default values
 MODEL_PATH="./best_siamese_bert.pth"
-CANDIDATES_FILE="bloom_candidates.json"
+CANDIDATES_FILE="bloom_overlap_results.json"
 THRESHOLD=0.5
 MAX_CANDIDATES=""
 OUTPUT_FILE=""
@@ -23,6 +23,7 @@ show_help() {
     echo "  -t, --threshold FLOAT         Similarity threshold (default: $THRESHOLD)"
     echo "  -n, --max_candidates N        Max candidates to process (default: all)"
     echo "  -o, --output_file FILE        Output file path (default: auto-generated)"
+    echo "  --max_pages N                 Skip papers longer than N pages (default: 50)"
     echo "  --test PAPER_A PAPER_B        Test single pair of papers"
     echo "  --quick N                     Quick test with top N candidates (default: 10)"
     echo "  -h, --help                    Show this help message"
@@ -66,6 +67,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         -o|--output_file)
             OUTPUT_FILE="$2"
+            shift 2
+            ;;
+        --max_pages)
+            MAX_PAGES="$2"
             shift 2
             ;;
         --test)
@@ -177,6 +182,10 @@ else
         fi
         echo ""
     fi
+fi
+
+if [ ! -z "$MAX_PAGES" ]; then
+    CMD="$CMD --max_pages $MAX_PAGES"
 fi
 
 # Run the command
