@@ -1,7 +1,7 @@
 #!/bin/bash
 echo "=== Starting Clustering Session ==="
 
-srun --nodelist=goldfish-01 --gres=gpu:h200:1 --cpus-per-task=8 --mem=32G --time=2:00:00 --pty bash -c "
+srun --nodelist=goldfish-01 --gres=gpu:h200:1 --cpus-per-task=8 --mem=128G --time=4:00:00 --pty bash -c "
 
 echo 'Setting up clustering environment in /tmp...'
 cd /tmp
@@ -21,6 +21,9 @@ cp ~/bloom_pipeline.py /tmp/clustering_work/
 cp ~/paper_counter.py /tmp/clustering_work/
 cp ~/best_siamese_bert.pth /tmp/clustering_work/
 cp ~/plagiarism_detector.py /tmp/clustering_work/
+cp ~/inference_pipeline.py /tmp/clustering_work/
+cp ~/run_plagiarism_weights.sh /tmp/clustering_work/
+cp ~/process_bloom_candidates.py /tmp/clustering_work/
 
 echo '=== Ready for clustering! ==='
 echo 'Run: python tex_clustering.py /sci/labs/orzuk/orzuk/teaching/big_data_project_52017/2024_25/arxiv_data/full_papers'
