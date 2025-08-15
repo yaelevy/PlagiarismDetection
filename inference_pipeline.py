@@ -2,7 +2,6 @@
 """
 Plagiarism Detection Inference Pipeline
 Applies trained Siamese BERT model to Bloom filter candidates
-Usage: python inference_pipeline.py --model_path best_siamese_bert.pth --candidates_file bloom_candidates.json [options]
 """
 
 import argparse
@@ -64,6 +63,7 @@ def extract_content_for_inference(tex_file_path: str) -> str:
         # Preserve structure by keeping citations/references as tokens
         tex_content = re.sub(r'\\cite[tp]?\{[^}]*\}', '[CITE]', tex_content)
         tex_content = re.sub(r'\\ref\{[^}]*\}', '[REF]', tex_content)
+        tex_content = re.sub(r'\n\s*\n', ' PARAGRAPH_BREAK ', tex_content)
 
         # Remove LaTeX formatting but preserve content
         tex_content = re.sub(r'\\textbf\{([^}]*)\}', r'\1', tex_content)
@@ -76,10 +76,19 @@ def extract_content_for_inference(tex_file_path: str) -> str:
         tex_content = re.sub(r'\\[a-zA-Z]+\*?\{[^}]*\}', '', tex_content)
         tex_content = re.sub(r'\\[a-zA-Z]+\*?', '', tex_content)
 
+        # Remove section markers that are just numbers/symbols on their own line
+        tex_content = re.sub(r'\n\s*-?\d+\s*\n', '\n\n', tex_content)
+
         # Clean up
         tex_content = re.sub(r'[{}]', '', tex_content)
         tex_content = re.sub(r'~', ' ', tex_content)
-        tex_content = re.sub(r'\s+', ' ', tex_content)
+        # Preserve paragraph breaks but clean up other whitespace
+        tex_content = re.sub(r'[ \t]+', ' ', tex_content)  # Only collapse spaces and tabs
+        tex_content = re.sub(r'\n[ \t]*\n', '\n\n', tex_content)  # Normalize paragraph breaks
+        tex_content = re.sub(r'\n{3,}', '\n\n', tex_content)  # Limit to double newlines max
+
+        # Restore paragraph breaks (handle extra spaces around the placeholder)
+        tex_content = re.sub(r'\s*PARAGRAPH_BREAK\s*', '\n\n', tex_content)
 
 
         return tex_content.strip()
@@ -91,58 +100,122 @@ def extract_content_for_inference(tex_file_path: str) -> str:
 
 def chunk_text_for_bert(text: str, tokenizer, max_length: int = 512) -> List[str]:
     """
-    Split long text into chunks that fit BERT's token limit
+    Split long text into chunks that fit BERT's token limit, prioritizing paragraph boundaries.
+    Forces breaks at section boundaries (standalone numbers/markers).
+    If a paragraph exceeds the token limit, split it at sentence boundaries.
     Returns list of text chunks
     """
     if not text:
         return []
-    
+
     # Quick check if text fits in one chunk
     tokens = tokenizer.encode(text, add_special_tokens=True)
     if len(tokens) <= max_length:
         return [text]
-    
-    # Split into sentences first
-    sentences = re.split(r'[.!?]+', text)
+
+    # Split into paragraphs first
+    paragraphs = re.split(r'\n\s*\n', text.strip())
+
+    # Identify section breaks (standalone numbers/markers OR short title-like paragraphs)
+    section_breaks = set()
+    for i, para in enumerate(paragraphs):
+        para_clean = para.strip()
+        # Standalone numbers (sections)
+        if re.match(r'^\s*-?\d+\s*$', para_clean):
+            section_breaks.add(i)
+        # Short title-like paragraphs (subsections) - typically < 80 chars, no periods
+        elif len(para_clean) < 80 and not para_clean.endswith('.') and len(para_clean.split()) <= 8:
+            section_breaks.add(i)
+
     chunks = []
     current_chunk = ""
-    
+
+    for i, paragraph in enumerate(paragraphs):
+        paragraph = paragraph.strip()
+        if not paragraph:
+            continue
+
+        # Force chunk break at section boundaries
+        if i in section_breaks:
+            if current_chunk:
+                chunks.append(current_chunk)
+                current_chunk = ""
+            continue  # Skip the section marker itself
+
+        # Check if current chunk + this paragraph fits
+        test_chunk = f"{current_chunk}\n\n{paragraph}".strip() if current_chunk else paragraph
+        test_tokens = tokenizer.encode(test_chunk, add_special_tokens=True)
+
+        if len(test_tokens) <= max_length and not current_chunk:  # Only combine if starting fresh
+            current_chunk = test_chunk
+        else:
+            # Force paragraph boundary
+            if current_chunk:
+                chunks.append(current_chunk)
+            current_chunk = paragraph if len(tokenizer.encode(paragraph, add_special_tokens=True)) <= max_length else ""
+
+            # Check if paragraph itself exceeds limit
+            para_tokens = tokenizer.encode(paragraph, add_special_tokens=True)
+            if len(para_tokens) <= max_length:
+                current_chunk = paragraph
+            else:
+                # Split oversized paragraph by sentences
+                para_chunks = split_paragraph_by_sentences(paragraph, tokenizer, max_length)
+                # Add all but the last chunk
+                chunks.extend(para_chunks[:-1])
+                # Set the last chunk as current
+                current_chunk = para_chunks[-1] if para_chunks else ""
+
+    # Add final chunk
+    if current_chunk:
+        chunks.append(current_chunk)
+
+    return chunks if chunks else [text[:1000]]  # Fallback
+
+
+def split_paragraph_by_sentences(paragraph: str, tokenizer, max_length: int) -> List[str]:
+    """
+    Split a paragraph that exceeds token limit by sentence boundaries
+    """
+    sentences = re.split(r'(?<=[.!?])\s+', paragraph)
+    chunks = []
+    current_chunk = ""
+
     for sentence in sentences:
         sentence = sentence.strip()
         if not sentence:
             continue
-            
+
         # Check if adding this sentence exceeds limit
         test_chunk = f"{current_chunk} {sentence}".strip()
         test_tokens = tokenizer.encode(test_chunk, add_special_tokens=True)
-        
+
         if len(test_tokens) <= max_length:
             current_chunk = test_chunk
         else:
             # Save current chunk if it has content
             if current_chunk:
                 chunks.append(current_chunk)
-            # Start new chunk with current sentence
-            current_chunk = sentence
-            
-            # If single sentence is still too long, truncate it
+
+            # Handle oversized single sentence
             single_tokens = tokenizer.encode(sentence, add_special_tokens=True)
             if len(single_tokens) > max_length:
-                # Decode truncated tokens back to text
-                truncated_tokens = single_tokens[:max_length-1]  # Leave room for SEP token
+                # Truncate sentence to fit
+                truncated_tokens = single_tokens[:max_length - 1]  # Leave room for SEP token
                 current_chunk = tokenizer.decode(truncated_tokens, skip_special_tokens=True)
-    
+            else:
+                current_chunk = sentence
+
     # Add final chunk
     if current_chunk:
         chunks.append(current_chunk)
 
-
-
-    return chunks if chunks else [text[:1000]]  # Fallback
+    return chunks
 
 
 def compare_papers_with_chunking(model: SiameseBERT, tokenizer, file_a: str, file_b: str, 
-                                threshold: float = 0.5, device: str = 'cuda') -> Dict:
+                                threshold: float = 0.5, device: str = 'cuda',
+                                max_pages: int = 50) -> Dict:
     """
     Compare two papers using chunking strategy for long documents
     Returns aggregated similarity result
@@ -158,7 +231,19 @@ def compare_papers_with_chunking(model: SiameseBERT, tokenizer, file_a: str, fil
             'error': 'Could not extract text from one or both files',
             'chunks_compared': 0
         }
-    
+
+    # PAPER FILTER:
+    # Rough estimation: ~2000 characters per page
+    MAX_CHARS = max_pages * 2000  # Use the parameter instead of hardcoded 50
+
+    if len(text_a) > MAX_CHARS or len(text_b) > MAX_CHARS:
+        return {
+            'similarity_score': 0.0,
+            'is_plagiarized': False,
+            'error': f'Paper too long (>{max_pages} pages estimated). File A: {len(text_a)} chars, File B: {len(text_b)} chars',
+            'chunks_compared': 0,
+            'skipped_reason': 'too_long'
+        }
     # Create chunks
     chunks_a = chunk_text_for_bert(text_a, tokenizer)
     chunks_b = chunk_text_for_bert(text_b, tokenizer)
@@ -168,16 +253,19 @@ def compare_papers_with_chunking(model: SiameseBERT, tokenizer, file_a: str, fil
     
     # Compare all chunk pairs and collect similarity scores
     similarities = []
-    max_similarity = 0.0
+    #max_similarity = 0.0
     
     for chunk_a in chunks_a:
         for chunk_b in chunks_b:
-            print("chunk_a:", chunk_a, "chunk_b:", chunk_b)
+            print("\n------------------------------------------------")
+            print("\n\n")
+            print("chunk_a:\n", chunk_a, "\n\nchunk_b:\n", chunk_b)
             result = predict_similarity(model, tokenizer, chunk_a, chunk_b, 
                                       threshold=None, device=device)
             score = result['similarity_score']
+            print(f"\n\nsimilarity: {score:.4f}\n")
             similarities.append(score)
-            max_similarity = max(max_similarity, score)
+            #max_similarity = max(max_similarity, score)
     
     if not similarities:
         return {
@@ -198,7 +286,7 @@ def compare_papers_with_chunking(model: SiameseBERT, tokenizer, file_a: str, fil
     
     return {
         'similarity_score': final_score,
-        'max_similarity': max_similarity,
+        #'max_similarity': max_similarity,
         'mean_similarity': mean_similarity,
         'median_similarity': median_similarity,
         'is_plagiarized': final_score > threshold,
@@ -212,7 +300,8 @@ def compare_papers_with_chunking(model: SiameseBERT, tokenizer, file_a: str, fil
 def run_inference_on_candidates(model_path: str, candidates_file: str, 
                                threshold: float = 0.5, output_file: str = None,
                                max_candidates: int = None, 
-                               prioritize_high: bool = True) -> List[Dict]:
+                               prioritize_high: bool = True,
+                               max_pages: int = 50) -> List[Dict]:
     """
     Run Siamese BERT inference on Bloom filter candidates
     """
@@ -238,16 +327,14 @@ def run_inference_on_candidates(model_path: str, candidates_file: str,
     print(f"Loaded {len(candidates)} candidate pairs from Bloom filter")
     
     # Filter and sort candidates
-    if prioritize_high:
-        # Sort by priority (high first) then by signal strength
-        candidates.sort(key=lambda x: (
-            0 if x.get('priority') == 'high' else 1,
-            -x.get('signal_strength', 0)
-        ))
-    else:
-        # Sort by signal strength only
-        candidates.sort(key=lambda x: -x.get('signal_strength', 0))
-    
+    for c in candidates:
+        if c["actual_overlaps"] == 0:
+            # remove the candidate
+            candidates.remove(c)
+
+    # sort the candidates by actual_overlaps
+    candidates.sort(key=lambda x: x["actual_overlaps"], reverse=True)
+
     # Limit candidates if specified
     if max_candidates:
         candidates = candidates[:max_candidates]
@@ -277,8 +364,9 @@ def run_inference_on_candidates(model_path: str, candidates_file: str,
         print(f"\n[{i+1}/{len(candidates)}] Processing:")
         print(f"  A: {os.path.basename(file_a)}")
         print(f"  B: {os.path.basename(file_b)}")
+        print(f" actual overlaps: {candidate['actual_overlaps']}")
         print(f"  Bloom signal: {candidate.get('signal_strength', 'N/A')}")
-        print(f"  Priority: {candidate.get('priority', 'N/A')}")
+
         
         # Check if files exist
         if not os.path.exists(file_a) or not os.path.exists(file_b):
@@ -288,8 +376,7 @@ def run_inference_on_candidates(model_path: str, candidates_file: str,
         # Run inference
         try:
             result = compare_papers_with_chunking(
-                model, tokenizer, file_a, file_b, threshold, device
-            )
+                model, tokenizer, file_a, file_b, threshold, device, max_pages)
             
             # Add metadata
             result.update({
@@ -315,7 +402,7 @@ def run_inference_on_candidates(model_path: str, candidates_file: str,
             status = "🚨 PLAGIARISM DETECTED" if is_plagiarized else "✅ No plagiarism"
             print(f"  {status}")
             print(f"  Final similarity: {score:.4f}")
-            print(f"  Max chunk similarity: {result.get('max_similarity', 0):.4f}")
+            #print(f"  Max chunk similarity: {result.get('max_similarity', 0):.4f}")
             print(f"  Chunks compared: {chunks_compared}")
             
         except Exception as e:
@@ -406,13 +493,15 @@ def run_inference_on_candidates(model_path: str, candidates_file: str,
 def main():
     parser = argparse.ArgumentParser(description='Plagiarism Detection Inference Pipeline')
     parser.add_argument('--model_path', required=True, help='Path to trained Siamese BERT model')
-    parser.add_argument('--candidates_file', default='bloom_candidates.json', 
+    parser.add_argument('--candidates_file', default='bloom_overlap_results.json',
                         help='Path to Bloom filter candidates JSON file')
     parser.add_argument('--threshold', type=float, default=0.5, 
                         help='Similarity threshold for plagiarism detection')
     parser.add_argument('--output_file', help='Output file for results (default: auto-generated)')
     parser.add_argument('--max_candidates', type=int, 
                         help='Maximum number of candidates to process')
+    parser.add_argument('--max_pages', type=int, default=50,
+                        help='Skip papers longer than N pages (default: 50)')
     parser.add_argument('--prioritize_high', action='store_true', default=True,
                         help='Prioritize high-priority candidates first')
     parser.add_argument('--test_single', nargs=2, metavar=('PAPER_A', 'PAPER_B'),
@@ -452,7 +541,8 @@ def main():
             threshold=args.threshold,
             output_file=args.output_file,
             max_candidates=args.max_candidates,
-            prioritize_high=args.prioritize_high
+            prioritize_high=args.prioritize_high,
+            max_pages=args.max_pages
         )
 
 
