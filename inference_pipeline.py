@@ -18,7 +18,7 @@ from tqdm import tqdm
 # Import the model class from the training script
 import sys
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from plagiarism_detector import SiameseBERT, predict_similarity
+from plagiarism_detector import SiameseBERT
 
 
 def extract_content_for_inference(tex_file_path: str) -> str:
@@ -213,28 +213,83 @@ def split_paragraph_by_sentences(paragraph: str, tokenizer, max_length: int) -> 
     return chunks
 
 
-def compare_papers_with_chunking(model: SiameseBERT, tokenizer, file_a: str, file_b: str, 
-                                threshold: float = 0.5, device: str = 'cuda',
-                                max_pages: int = 50) -> Dict:
+def predict_similarities_batch(model: SiameseBERT, tokenizer, text_pairs: List[Tuple[str, str]],
+                               threshold: float = None, device: str = 'cuda',
+                               batch_size: int = 512) -> List[Dict]:
+    """Predict similarities for multiple text pairs in batches"""
+    model.eval()
+
+    if not text_pairs:
+        return []
+
+    results = []
+    total_batches = (len(text_pairs) + batch_size - 1) // batch_size  # Ceiling division
+
+    # Process in batches
+    for batch_idx, i in enumerate(range(0, len(text_pairs), batch_size)):
+        batch_pairs = text_pairs[i:i + batch_size]
+
+        # Print progress every few batches
+        if batch_idx % 10 == 0:
+            pairs_processed = min(i + batch_size, len(text_pairs))
+            print(f"  Batch {batch_idx + 1}/{total_batches}: Processed {pairs_processed}/{len(text_pairs)} pairs")
+
+        texts_1 = [pair[0] for pair in batch_pairs]
+        texts_2 = [pair[1] for pair in batch_pairs]
+
+        # Batch tokenize
+        encoding1 = tokenizer(texts_1, truncation=True, padding='max_length',
+                              max_length=512, return_tensors='pt')
+        encoding2 = tokenizer(texts_2, truncation=True, padding='max_length',
+                              max_length=512, return_tensors='pt')
+
+        # Move to device
+        input_ids_1 = encoding1['input_ids'].to(device)
+        attention_mask_1 = encoding1['attention_mask'].to(device)
+        input_ids_2 = encoding2['input_ids'].to(device)
+        attention_mask_2 = encoding2['attention_mask'].to(device)
+
+        # Batch inference
+        with torch.no_grad():
+            similarities = model(input_ids_1, attention_mask_1, input_ids_2, attention_mask_2)
+
+        # Build results
+        similarities_cpu = similarities.cpu().numpy()
+        for j, similarity_score in enumerate(similarities_cpu):
+            result = {'similarity_score': float(similarity_score)}
+            if threshold is not None:
+                result.update({
+                    'is_plagiarized': similarity_score > threshold,
+                    'threshold_used': threshold
+                })
+            results.append(result)
+
+    return results
+
+
+def compare_papers_with_chunking(model: SiameseBERT, tokenizer, file_a: str, file_b: str,
+                                 threshold: float = 0.5, device: str = 'cuda',
+                                 max_pages: int = 50) -> Dict:
     """
     Compare two papers using chunking strategy for long documents
-    Returns aggregated similarity result
+    Returns individual chunk pairs that exceeded the threshold
     """
     # Extract text content
     text_a = extract_content_for_inference(file_a)
     text_b = extract_content_for_inference(file_b)
-    
+
     if not text_a or not text_b:
         return {
             'similarity_score': 0.0,
             'is_plagiarized': False,
             'error': 'Could not extract text from one or both files',
-            'chunks_compared': 0
+            'chunks_compared': 0,
+            'exceeding_pairs': []
         }
 
     # PAPER FILTER:
     # Rough estimation: ~2000 characters per page
-    MAX_CHARS = max_pages * 2000  # Use the parameter instead of hardcoded 50
+    MAX_CHARS = max_pages * 2000
 
     if len(text_a) > MAX_CHARS or len(text_b) > MAX_CHARS:
         return {
@@ -242,66 +297,89 @@ def compare_papers_with_chunking(model: SiameseBERT, tokenizer, file_a: str, fil
             'is_plagiarized': False,
             'error': f'Paper too long (>{max_pages} pages estimated). File A: {len(text_a)} chars, File B: {len(text_b)} chars',
             'chunks_compared': 0,
-            'skipped_reason': 'too_long'
+            'skipped_reason': 'too_long',
+            'exceeding_pairs': []
         }
+
     # Create chunks
     chunks_a = chunk_text_for_bert(text_a, tokenizer)
     chunks_b = chunk_text_for_bert(text_b, tokenizer)
-    
+
     print(f"  Text A: {len(text_a)} chars → {len(chunks_a)} chunks")
     print(f"  Text B: {len(text_b)} chars → {len(chunks_b)} chunks")
-    
+
     # Compare all chunk pairs and collect similarity scores
-    similarities = []
-    #max_similarity = 0.0
-    
-    for chunk_a in chunks_a:
-        for chunk_b in chunks_b:
-            print("\n------------------------------------------------")
-            print("\n\n")
-            print("chunk_a:\n", chunk_a, "\n\nchunk_b:\n", chunk_b)
-            result = predict_similarity(model, tokenizer, chunk_a, chunk_b, 
-                                      threshold=None, device=device)
-            score = result['similarity_score']
-            print(f"\n\nsimilarity: {score:.4f}\n")
-            similarities.append(score)
-            #max_similarity = max(max_similarity, score)
-    
+    # Create all chunk pairs with metadata
+    chunk_pairs = []
+    chunk_metadata = []
+    for i, chunk_a in enumerate(chunks_a):
+        for j, chunk_b in enumerate(chunks_b):
+            chunk_pairs.append((chunk_a, chunk_b))
+            chunk_metadata.append({
+                'chunk_a_index': i,
+                'chunk_b_index': j,
+                'chunk_a_text': chunk_a,
+                'chunk_b_text': chunk_b
+            })
+
+    # Batch process all pairs
+    print(f"  Processing {len(chunk_pairs)} pairs in batches...")
+    results = predict_similarities_batch(
+        model, tokenizer, chunk_pairs, threshold=None, device=device, batch_size=512
+    )
+
+    # Extract similarity scores and find exceeding pairs
+    similarities = [r['similarity_score'] for r in results]
+    exceeding_pairs = []
+
+    for i, result in enumerate(results):
+        similarity_score = result['similarity_score']
+        if similarity_score > threshold:
+            exceeding_pair = {
+                'chunk_a_index': chunk_metadata[i]['chunk_a_index'],
+                'chunk_b_index': chunk_metadata[i]['chunk_b_index'],
+                'chunk_a_text': chunk_metadata[i]['chunk_a_text'],
+                'chunk_b_text': chunk_metadata[i]['chunk_b_text'],
+                'similarity_score': similarity_score,
+                'exceeded_threshold': True
+            }
+            exceeding_pairs.append(exceeding_pair)
+
     if not similarities:
         return {
             'similarity_score': 0.0,
             'is_plagiarized': False,
             'error': 'No valid chunks to compare',
-            'chunks_compared': 0
+            'chunks_compared': 0,
+            'exceeding_pairs': []
         }
-    
-    # Aggregation strategies
+
+    # Keep some aggregated stats for reference
     mean_similarity = sum(similarities) / len(similarities)
     median_similarity = sorted(similarities)[len(similarities) // 2]
     top_10_percent = sorted(similarities, reverse=True)[:max(1, len(similarities) // 10)]
     top_10_mean = sum(top_10_percent) / len(top_10_percent)
-    
-    # Use top-10% mean as final score (focuses on most similar parts)
     final_score = top_10_mean
-    
+
     return {
         'similarity_score': final_score,
-        #'max_similarity': max_similarity,
         'mean_similarity': mean_similarity,
         'median_similarity': median_similarity,
-        'is_plagiarized': final_score > threshold,
+        'is_plagiarized': len(exceeding_pairs) > 0,  # True if any pairs exceeded threshold
         'chunks_compared': len(similarities),
         'chunks_a': len(chunks_a),
         'chunks_b': len(chunks_b),
-        'threshold_used': threshold
+        'threshold_used': threshold,
+        'exceeding_pairs': exceeding_pairs,  # NEW: List of chunk pairs that exceeded threshold
+        'num_exceeding_pairs': len(exceeding_pairs)  # NEW: Count of exceeding pairs
     }
 
 
-def run_inference_on_candidates(model_path: str, candidates_file: str, 
-                               threshold: float = 0.5, output_file: str = None,
-                               max_candidates: int = None, 
-                               prioritize_high: bool = True,
-                               max_pages: int = 50) -> List[Dict]:
+def run_inference_on_candidates(model_path: str, candidates_file: str,
+                                threshold: float = 0.5, output_file: str = None,
+                                max_candidates: int = None,
+                                prioritize_high: bool = True,
+                                max_pages: int = 50) -> List[Dict]:
     """
     Run Siamese BERT inference on Bloom filter candidates
     """
@@ -313,19 +391,19 @@ def run_inference_on_candidates(model_path: str, candidates_file: str,
     print(f"Threshold: {threshold}")
     print(f"Max candidates: {max_candidates or 'All'}")
     print("=" * 80)
-    
+
     # Check if files exist
     if not os.path.exists(model_path):
         raise FileNotFoundError(f"Model file not found: {model_path}")
     if not os.path.exists(candidates_file):
         raise FileNotFoundError(f"Candidates file not found: {candidates_file}")
-    
+
     # Load candidates
     with open(candidates_file, 'r') as f:
         candidates = json.load(f)
-    
+
     print(f"Loaded {len(candidates)} candidate pairs from Bloom filter")
-    
+
     # Filter and sort candidates
     for c in candidates:
         if c["actual_overlaps"] == 0:
@@ -339,45 +417,44 @@ def run_inference_on_candidates(model_path: str, candidates_file: str,
     if max_candidates:
         candidates = candidates[:max_candidates]
         print(f"Limited to top {max_candidates} candidates")
-    
+
     # Initialize model
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f"Using device: {device}")
-    
+
     tokenizer = AutoTokenizer.from_pretrained('bert-base-uncased')
     model = SiameseBERT('bert-base-uncased')
     model.load_state_dict(torch.load(model_path, map_location=device))
     model = model.to(device)
     model.eval()
-    
+
     print(f"Model loaded successfully")
     print()
-    
+
     # Process candidates
     results = []
     start_time = time.time()
-    
+
     for i, candidate in enumerate(tqdm(candidates, desc="Processing candidates")):
         file_a = candidate['file_a']
         file_b = candidate['file_b']
-        
-        print(f"\n[{i+1}/{len(candidates)}] Processing:")
+
+        print(f"\n[{i + 1}/{len(candidates)}] Processing:")
         print(f"  A: {os.path.basename(file_a)}")
         print(f"  B: {os.path.basename(file_b)}")
         print(f" actual overlaps: {candidate['actual_overlaps']}")
         print(f"  Bloom signal: {candidate.get('signal_strength', 'N/A')}")
 
-        
         # Check if files exist
         if not os.path.exists(file_a) or not os.path.exists(file_b):
             print(f"  ❌ SKIPPED: One or both files not found")
             continue
-        
+
         # Run inference
         try:
             result = compare_papers_with_chunking(
                 model, tokenizer, file_a, file_b, threshold, device, max_pages)
-            
+
             # Add metadata
             result.update({
                 'file_a': file_a,
@@ -391,20 +468,32 @@ def run_inference_on_candidates(model_path: str, candidates_file: str,
                 'authors_b': candidate.get('authors_b', []),
                 'processing_order': i + 1
             })
-            
+
             results.append(result)
-            
+
             # Display result
             score = result['similarity_score']
             is_plagiarized = result['is_plagiarized']
             chunks_compared = result['chunks_compared']
-            
+            exceeding_pairs = result.get('exceeding_pairs', [])
+
             status = "🚨 PLAGIARISM DETECTED" if is_plagiarized else "✅ No plagiarism"
             print(f"  {status}")
             print(f"  Final similarity: {score:.4f}")
-            #print(f"  Max chunk similarity: {result.get('max_similarity', 0):.4f}")
             print(f"  Chunks compared: {chunks_compared}")
-            
+            print(f"  Pairs exceeding threshold: {len(exceeding_pairs)}")
+
+            # Display the exceeding pairs
+            if exceeding_pairs:
+                print(f"  📋 EXCEEDING PAIRS:")
+                for idx, pair in enumerate(exceeding_pairs[:3]):  # Show first 3 pairs
+                    print(f"    Pair {idx + 1}: Score {pair['similarity_score']:.4f}")
+                    print(f"      Chunk A[{pair['chunk_a_index']}]: {pair['chunk_a_text'][:100]}...")
+                    print(f"      Chunk B[{pair['chunk_b_index']}]: {pair['chunk_b_text'][:100]}...")
+                    print()
+                if len(exceeding_pairs) > 3:
+                    print(f"    ... and {len(exceeding_pairs) - 3} more pairs")
+
         except Exception as e:
             print(f"  ❌ ERROR: {e}")
             results.append({
@@ -418,30 +507,31 @@ def run_inference_on_candidates(model_path: str, candidates_file: str,
                 'bloom_signal_strength': candidate.get('signal_strength'),
                 'bloom_priority': candidate.get('priority'),
                 'cluster_id': candidate.get('cluster_id'),
-                'processing_order': i + 1
+                'processing_order': i + 1,
+                'exceeding_pairs': []
             })
-    
+
     end_time = time.time()
     processing_time = end_time - start_time
-    
+
     # Final analysis
     print("\n" + "=" * 80)
     print("INFERENCE COMPLETE")
     print("=" * 80)
     print(f"⏱️  Processing time: {processing_time:.2f} seconds")
     print(f"📊 Total pairs analyzed: {len(results)}")
-    
+
     # Filter successful results
     successful_results = [r for r in results if 'error' not in r]
     error_results = [r for r in results if 'error' in r]
-    
+
     print(f"✅ Successful analyses: {len(successful_results)}")
     print(f"❌ Errors: {len(error_results)}")
-    
+
     if successful_results:
         plagiarism_detected = [r for r in successful_results if r['is_plagiarized']]
         print(f"🚨 Plagiarism detected: {len(plagiarism_detected)}")
-        
+
         # Top plagiarism candidates
         if plagiarism_detected:
             plagiarism_detected.sort(key=lambda x: x['similarity_score'], reverse=True)
@@ -449,46 +539,29 @@ def run_inference_on_candidates(model_path: str, candidates_file: str,
             for i, result in enumerate(plagiarism_detected[:5]):
                 score = result['similarity_score']
                 bloom_signal = result.get('bloom_signal_strength', 'N/A')
-                print(f"  {i+1}. {result['file_a_name']} <-> {result['file_b_name']}")
-                print(f"     BERT similarity: {score:.4f} | Bloom signal: {bloom_signal}")
-        
+                num_exceeding = len(result.get('exceeding_pairs', []))
+                print(f"  {i + 1}. {result['file_a_name']} <-> {result['file_b_name']}")
+                print(
+                    f"     BERT similarity: {score:.4f} | Bloom signal: {bloom_signal} | Exceeding pairs: {num_exceeding}")
+
         # Statistics
         scores = [r['similarity_score'] for r in successful_results]
+        total_exceeding_pairs = sum(len(r.get('exceeding_pairs', [])) for r in successful_results)
         print(f"\n📈 SIMILARITY STATISTICS:")
-        print(f"  Mean: {sum(scores)/len(scores):.4f}")
+        print(f"  Mean: {sum(scores) / len(scores):.4f}")
         print(f"  Max: {max(scores):.4f}")
         print(f"  Min: {min(scores):.4f}")
-    
+        print(f"  Total exceeding chunk pairs: {total_exceeding_pairs}")
+
     # Save results
     if output_file is None:
         output_file = f"inference_results_{int(time.time())}.json"
-    
+
     with open(output_file, 'w') as f:
         json.dump(results, f, indent=2)
     print(f"\n💾 Results saved to: {output_file}")
-    
-    # Create summary CSV
-    csv_file = output_file.replace('.json', '.csv')
-    df_data = []
-    for result in results:
-        df_data.append({
-            'file_a': result['file_a_name'],
-            'file_b': result['file_b_name'],
-            'similarity_score': result.get('similarity_score', 0),
-            'is_plagiarized': result.get('is_plagiarized', False),
-            'bloom_signal': result.get('bloom_signal_strength', 0),
-            'bloom_priority': result.get('bloom_priority', ''),
-            'cluster_id': result.get('cluster_id', ''),
-            'chunks_compared': result.get('chunks_compared', 0),
-            'error': result.get('error', '')
-        })
-    
-    df = pd.DataFrame(df_data)
-    df.to_csv(csv_file, index=False)
-    print(f"📊 Summary saved to: {csv_file}")
-    
-    return results
 
+    return results
 
 def main():
     parser = argparse.ArgumentParser(description='Plagiarism Detection Inference Pipeline')
