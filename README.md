@@ -117,10 +117,11 @@ python process_bloom_candidates.py
 Apply the trained model to Bloom candidates from the bloom_overlap_results.json:
 
 ```bash
-./run_plagiarism_weights.sh
+bash run_plagiarism_weights.sh --max_pages 50 -t 0.8 
 ```
-
 This uses `inference_pipeline.py` and the model trained weights to detect semantic overlap between paragraphs.
+
+we chose to include papers with maximum of 50 pages and adjusted the threshold of similarity to be 0.8 (meaning pairs with similarity > 0.8 will be flagged as potential for plagiarism).
 
 **Output:** `inference_results_{int(time.time())}.json`
 
