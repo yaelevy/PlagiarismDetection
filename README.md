@@ -7,7 +7,13 @@ This pipeline implements a multi-stage approach to detect plagiarism in academic
 <img width="999" height="474" alt="צילום מסך 2025-08-26 ב-15 51 06" src="https://github.com/user-attachments/assets/d0e1d351-cf76-4896-b7aa-4567670e3d3a" />
 
 
-<img width="765" height="418" alt="צילום מסך 2025-08-26 ב-15 50 56" src="https://github.com/user-attachments/assets/11944e49-0409-4263-be40-39b6dc2476e5" />
+
+Siamese BERT architecture:
+
+<p align="center">
+  <img width="765" height="418" alt="צילום מסך 2025-08-26 ב-15 50 56" src="https://github.com/user-attachments/assets/11944e49-0409-4263-be40-39b6dc2476e5" />
+</p>
+
 
 
 
