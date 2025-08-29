@@ -9,22 +9,20 @@ import re
 import json
 import hashlib
 import argparse
-import time
-import pickle
 from itertools import combinations
-from multiprocessing import Pool, cpu_count
 from bitarray import bitarray
 import numpy as np
+from joblib import Parallel, delayed
 
 # -----------------------
 # GLOBAL CONFIGURATION
 # -----------------------
 BLOOM_CONFIG = {
-    'capacity': 50000,
-    'error_rate': 0.001,
-    'ngram_size': 8,
-    'threshold': 1500,
-    'high_priority_threshold': 2000,
+    'capacity': 100,000,               # handle more unique n-grams per paper
+    'error_rate': 0.001,               # low false positives
+    'ngram_size': 6,                    # smaller n-grams catch more subtle overlaps
+    'threshold': 1000,                  # lower than before, flags more candidate pairs
+    'high_priority_threshold': 1800,    # slightly lower to catch more “strong” matches
     'cache_dir': "bloom_cache"
 }
 
@@ -60,7 +58,7 @@ class BloomFilter:
             self.bit_array.tofile(f)
 
     @staticmethod
-    def load(path, size=None):
+    def load(path):
         bf = BloomFilter()
         if os.path.exists(path):
             with open(path, "rb") as f:
@@ -71,21 +69,16 @@ class BloomFilter:
 # TEXT PROCESSING
 # -----------------------
 def extract_text(tex_file):
-    """Extract text content optimized for recurring phrase detection."""
     try:
         with open(tex_file, 'r', encoding='utf-8', errors='ignore') as f:
             content = f.read()
-        # Remove LaTeX comments
         content = re.sub(r'^%.*$', '', content, flags=re.MULTILINE)
-        # Extract body
         m = re.search(r'\\begin\{document\}(.*?)\\end\{document\}', content, re.DOTALL)
         if m:
             content = m.group(1)
-        # Remove environments
         patterns = [r'\\begin\{.*?\}.*?\\end\{.*?\}', r'\$\$.*?\$\$', r'\$.*?\$']
         for pat in patterns:
             content = re.sub(pat, ' ', content, flags=re.DOTALL)
-        # Remove commands but preserve citations
         content = re.sub(r'\\cite[tp]?\{[^}]*\}', '[CITE]', content)
         content = re.sub(r'\\ref\{[^}]*\}', '[REF]', content)
         content = re.sub(r'\\[a-zA-Z]+\*?(?:\[[^\]]*\])?\{[^}]*\}', '', content)
@@ -110,8 +103,7 @@ def generate_ngrams(text, n=None):
 def load_or_create_bloom(file_path):
     cache_path = os.path.join(BLOOM_CONFIG['cache_dir'], os.path.basename(file_path) + ".bf")
     if os.path.exists(cache_path):
-        bf = BloomFilter.load(cache_path)
-        return bf
+        return BloomFilter.load(cache_path)
     text = extract_text(file_path)
     ngrams = generate_ngrams(text)
     if len(ngrams) < 10:
@@ -156,43 +148,47 @@ def has_common_authors(file_a, file_b):
 # -----------------------
 # CLUSTER PREPROCESSING
 # -----------------------
-def compare_pair(args):
-    file_a, file_b, threshold = args
-    bf_a = load_or_create_bloom(file_a)
-    bf_b = load_or_create_bloom(file_b)
-    if not bf_a or not bf_b:
-        return None
-    overlap_flag, count = bf_a.check_overlap(bf_b, threshold=threshold)
-    if not overlap_flag:
-        return None
-    same_authors, common = has_common_authors(file_a, file_b)
-    return {
-        'file_a': file_a,
-        'file_b': file_b,
-        'signal_strength': count,
-        'priority': 'high' if count > BLOOM_CONFIG['high_priority_threshold'] else 'medium',
-        'common_authors': list(common),
-        'same_authors': same_authors
-    }
+def preprocess_cluster(cluster_id, valid_files, threshold):
+    bloom_filters = {f: load_or_create_bloom(f) for f in valid_files}
+
+    def compare_pair_parallel(file_a, file_b):
+        bf_a = bloom_filters[file_a]
+        bf_b = bloom_filters[file_b]
+        if not bf_a or not bf_b:
+            return None
+        overlap_flag, count = bf_a.check_overlap(bf_b, threshold=threshold)
+        if not overlap_flag:
+            return None
+        same_authors, common = has_common_authors(file_a, file_b)
+        candidate = {
+            'file_a': file_a,
+            'file_b': file_b,
+            'signal_strength': count,
+            'priority': 'high' if count > BLOOM_CONFIG['high_priority_threshold'] else 'medium',
+            'common_authors': list(common),
+            'same_authors': same_authors,
+            'cluster_id': cluster_id
+        }
+        return candidate if not same_authors else None
+
+    pairs = [(valid_files[i], valid_files[j]) for i in range(len(valid_files)) for j in range(i+1, len(valid_files))]
+    results = Parallel(n_jobs=-1)(delayed(compare_pair_parallel)(a,b) for a,b in pairs)
+    results = [r for r in results if r]
+    print(f"[Cluster {cluster_id}] Total pairs: {len(pairs)}, Candidates: {len(results)}")
+    return results
 
 def preprocess_clusters():
     if not os.path.exists("cluster_results.json"):
         print("cluster_results.json not found!")
-        return
+        return []
     with open("cluster_results.json", 'r') as f:
         clusters = json.load(f)
     all_candidates = []
     for cid, files in clusters.items():
         if len(files) < 2:
             continue
-        pairs = list(combinations(files, 2))
-        with Pool(cpu_count()) as pool:
-            results = pool.map(compare_pair, [(a,b,BLOOM_CONFIG['threshold']) for a,b in pairs])
-        results = [r for r in results if r and not r['same_authors']]
-        for r in results:
-            r['cluster_id'] = cid
-        all_candidates.extend(results)
-    # Save results
+        candidates = preprocess_cluster(cid, files, BLOOM_CONFIG['threshold'])
+        all_candidates.extend(candidates)
     with open("bloom_candidates.json", "w") as f:
         json.dump(all_candidates, f, indent=2)
     print(f"Preprocessing complete. {len(all_candidates)} candidate pairs saved.")
