@@ -107,7 +107,6 @@ class SiameseBERT(nn.Module):
         self.classifier = nn.Sequential(
             nn.Linear(bert_dim * 3, 512),  # concatenated + absolute difference
             nn.LeakyReLU(negative_slope=0.01),
-            nn.Dropout(dropout),
             nn.Linear(512, 128),
             nn.LeakyReLU(negative_slope=0.01),
             nn.Dropout(dropout),
