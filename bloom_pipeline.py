@@ -18,7 +18,7 @@ from joblib import Parallel, delayed
 # GLOBAL CONFIGURATION
 # -----------------------
 BLOOM_CONFIG = {
-    'capacity': 100,000,               # handle more unique n-grams per paper
+    'capacity': 100000,               # handle more unique n-grams per paper
     'error_rate': 0.001,               # low false positives
     'ngram_size': 6,                    # smaller n-grams catch more subtle overlaps
     'threshold': 1000,                  # lower than before, flags more candidate pairs
